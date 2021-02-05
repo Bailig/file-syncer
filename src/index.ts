@@ -1,4 +1,4 @@
-import { readFileSync } from "fs";
+import { readFile } from "fs";
 import { cp, echo, find, ls, mkdir, rm } from "shelljs";
 
 const syncFrom = "";
@@ -46,16 +46,24 @@ const addFiles = (
     (p) => !destPaths.includes(p.replace(sourceRoot, destRoot))
   );
   if (shouldBeAdded.length === 0) return;
-  const addingMessage = shouldBeAdded.reduce(
-    (text, path) => `${text}\n${path}`,
-    "Adding:"
-  );
-  echo(addingMessage);
-  shouldBeAdded.forEach((source, index) => {
-    echo(`${index + 1}. ${source}`);
+  echo("Adding:");
+  shouldBeAdded.forEach((source) => {
+    echo(source);
     const dest = source.replace(sourceRoot, destRoot);
     mkdir("-p", dest.substr(0, dest.lastIndexOf("/")));
     cp(source, dest);
+  });
+};
+
+const readFileAsync = (path: string) => {
+  return new Promise<Buffer>((resolve, reject) => {
+    readFile(path, (error, data) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve(data);
+    });
   });
 };
 
@@ -64,18 +72,21 @@ const updateFiles = (
   destRoot: string,
   sourcePaths: string[]
 ) => {
-  const needToBeUpdated = sourcePaths.filter((source) => {
+  let logged = false;
+  sourcePaths.forEach(async (source) => {
     const dest = source.replace(sourceRoot, destRoot);
-    const sourceBuff = readFileSync(source);
-    const destBuff = readFileSync(dest);
-    return !sourceBuff.equals(destBuff);
-  });
+    if (find(dest).code !== 0) return;
 
-  if (needToBeUpdated.length === 0) return;
-  echo("Updating:");
-  needToBeUpdated.forEach((source, index) => {
-    const dest = source.replace(sourceRoot, destRoot);
-    echo(`${index + 1}. ${dest}`);
+    const [sourceBuff, destBuff] = await Promise.all([
+      readFileAsync(source),
+      readFileAsync(dest),
+    ]);
+    if (sourceBuff.equals(destBuff)) return;
+    if (!logged) {
+      echo("Updating:");
+      logged = true;
+    }
+    echo(`${dest}`);
     cp(source, dest);
   });
 };
