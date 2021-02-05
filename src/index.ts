@@ -1,8 +1,11 @@
-import { readFile } from "fs";
+import { readFile, stat, Stats } from "fs";
 import { cp, echo, find, ls, mkdir, rm } from "shelljs";
+
+type CheckUpdateBy = "modifiedDate" | "fileChange";
 
 const syncFrom = "";
 const syncTo = "";
+const checkUpdateBy: CheckUpdateBy = "modifiedDate";
 
 const getFilePaths = (dir: string) =>
   find(dir)
@@ -55,9 +58,9 @@ const addFiles = (
   });
 };
 
-const readFileAsync = (path: string) => {
-  return new Promise<Buffer>((resolve, reject) => {
-    readFile(path, (error, data) => {
+const promisify = <D>(fun: any) => (...args: any[]) =>
+  new Promise<D>((resolve, reject) => {
+    fun(...args, (error: Error, data: D) => {
       if (error) {
         reject(error);
         return;
@@ -65,23 +68,45 @@ const readFileAsync = (path: string) => {
       resolve(data);
     });
   });
+
+const statAsync = promisify<Stats>(stat);
+const readFileAsync = promisify<Buffer>(readFile);
+
+const shouldUpdate = async (
+  source: string,
+  dest: string,
+  checkUpdateBy: CheckUpdateBy
+) => {
+  if (checkUpdateBy === "fileChange") {
+    const [sourceBuff, destBuff] = await Promise.all([
+      readFileAsync(source),
+      readFileAsync(dest),
+    ]);
+    return !sourceBuff.equals(destBuff);
+  } else {
+    const [sourceStat, destStat] = await Promise.all([
+      statAsync(source),
+      statAsync(dest),
+    ]);
+    return sourceStat.mtimeMs > destStat.mtimeMs;
+  }
 };
 
 const updateFiles = (
   sourceRoot: string,
   destRoot: string,
-  sourcePaths: string[]
+  sourcePaths: string[],
+  checkUpdateBy: CheckUpdateBy
 ) => {
   let logged = false;
-  sourcePaths.forEach(async (source) => {
+  const promises = sourcePaths.map(async (source) => {
     const dest = source.replace(sourceRoot, destRoot);
-    if (find(dest).code !== 0) return;
+    if (
+      find(dest).code !== 0 ||
+      !(await shouldUpdate(source, dest, checkUpdateBy))
+    )
+      return;
 
-    const [sourceBuff, destBuff] = await Promise.all([
-      readFileAsync(source),
-      readFileAsync(dest),
-    ]);
-    if (sourceBuff.equals(destBuff)) return;
     if (!logged) {
       echo("Updating:");
       logged = true;
@@ -89,9 +114,14 @@ const updateFiles = (
     echo(`${dest}`);
     cp(source, dest);
   });
+  Promise.all(promises);
 };
 
-const sync = (syncFrom: string, syncTo: string) => {
+const sync = (
+  syncFrom: string,
+  syncTo: string,
+  checkUpdateBy: CheckUpdateBy
+) => {
   if (
     syncFrom === "/" ||
     syncFrom === "~" ||
@@ -110,7 +140,7 @@ const sync = (syncFrom: string, syncTo: string) => {
 
   removeFiles(syncFrom, syncTo, syncFromPaths, syncToPaths);
   addFiles(syncFrom, syncTo, syncFromPaths, syncToPaths);
-  updateFiles(syncFrom, syncTo, syncFromPaths);
+  updateFiles(syncFrom, syncTo, syncFromPaths, checkUpdateBy);
 };
 
-sync(syncFrom, syncTo);
+sync(syncFrom, syncTo, checkUpdateBy);
